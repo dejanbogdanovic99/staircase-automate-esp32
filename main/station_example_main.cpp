@@ -19,6 +19,8 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
+#include "staircase/BasicLight.hxx"
+
 /* The examples use WiFi configuration that you can set via project
    configuration menu
 
@@ -93,7 +95,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-void wifi_init_sta(void) {
+extern "C" void wifi_init_sta(void) {
     s_wifi_event_group = xEventGroupCreate();
 
     ESP_ERROR_CHECK(esp_netif_init());
@@ -116,6 +118,16 @@ void wifi_init_sta(void) {
             {
                 .ssid = EXAMPLE_ESP_WIFI_SSID,
                 .password = EXAMPLE_ESP_WIFI_PASS,
+                .scan_method = WIFI_FAST_SCAN,
+                .bssid_set = false,
+                .bssid = {0},
+                .channel = 0,
+                .listen_interval = 0,
+                .sort_method = WIFI_CONNECT_AP_BY_SIGNAL,
+                .threshold = {
+                    .rssi = 0,
+                    .authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD
+                },
                 /* Authmode threshold resets to WPA2 as default if password
                  * matches WPA2 standards (pasword len => 8). If you want to
                  * connect the device to deprecated WEP/WPA networks, Please set
@@ -123,7 +135,6 @@ void wifi_init_sta(void) {
                  * set the password with length and format matching to
                  * WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK standards.
                  */
-                .threshold.authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD,
                 .sae_pwe_h2e = ESP_WIFI_SAE_MODE,
                 .sae_h2e_identifier = EXAMPLE_H2E_IDENTIFIER,
             },
@@ -154,7 +165,7 @@ void wifi_init_sta(void) {
     }
 }
 
-void app_main(void) {
+extern "C" void app_main(void) {
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
