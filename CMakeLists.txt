@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.16)
 
 set(CMAKE_CXX_STANDARD 20)
 
-list(APPEND EXTRA_COMPONENT_DIRS staircase-automate/esp32/component/staircase-automate)
+list(APPEND EXTRA_COMPONENT_DIRS staircase-automate/esp32/component/staircase-automate staircase-automate-hal)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(staircase-automate-esp32)

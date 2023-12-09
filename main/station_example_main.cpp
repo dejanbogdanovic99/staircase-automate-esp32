@@ -19,7 +19,8 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
-#include "staircase/BasicLight.hxx"
+#include "ESP32BinaryValueReader.hxx"
+#include "ESP32BinaryValueWriter.hxx"
 
 /* The examples use WiFi configuration that you can set via project
    configuration menu
@@ -124,10 +125,8 @@ extern "C" void wifi_init_sta(void) {
                 .channel = 0,
                 .listen_interval = 0,
                 .sort_method = WIFI_CONNECT_AP_BY_SIGNAL,
-                .threshold = {
-                    .rssi = 0,
-                    .authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD
-                },
+                .threshold = {.rssi = 0,
+                              .authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD},
                 /* Authmode threshold resets to WPA2 as default if password
                  * matches WPA2 standards (pasword len => 8). If you want to
                  * connect the device to deprecated WEP/WPA networks, Please set
@@ -176,5 +175,17 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(ret);
 
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+
+    esp32::ESP32BinaryValueWriter writer{GPIO_NUM_33};
+    writer.writeValue(hal::BinaryValue::HIGH);
+
+    esp32::ESP32BinaryValueReader reader{GPIO_NUM_34};
+
+    while (1)
+    {
+        ESP_LOGI(TAG, "Value from 34: %d", static_cast<int>(reader.readValue()));
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+
     wifi_init_sta();
 }

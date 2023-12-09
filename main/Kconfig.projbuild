@@ -1,5 +1,14 @@
 menu "Example Configuration"
 
+    choice BINARY_OUTPUT_DEFAULT_VALUE
+        prompt "Default binary output value"
+        default BINARY_OUTPUT_DEFAULT_VALUE_LOW
+        config BINARY_OUTPUT_DEFAULT_VALUE_LOW
+            bool "LOW"
+        config BINARY_OUTPUT_DEFAULT_VALUE_HIGH
+            bool "HIGH"
+    endchoice
+
     config ESP_WIFI_SSID
         string "WiFi SSID"
         default "myssid"
