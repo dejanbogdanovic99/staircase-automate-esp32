@@ -1,3 +1,3 @@
 [submodule "staircase-automate"]
-	path = staircase-automate
+	path = components/staircase-automate
 	url = git@github.com:dejanbogdanovic99/staircase-automate.git
