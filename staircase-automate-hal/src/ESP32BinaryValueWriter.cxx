@@ -39,7 +39,8 @@ esp_err_t ESP32BinaryValueWriter::init() noexcept {
 }
 
 void ESP32BinaryValueWriter::writeValue(hal::BinaryValue value) noexcept {
-    esp_err_t ret = gpio_set_level(mPin, getLevel(value));
+    uint32_t level = getLevel(value);
+    esp_err_t ret = gpio_set_level(mPin, level);
     if (ret != ESP_OK) {
         ESP_LOGW(kTag, "Failed to set %d due to %d", static_cast<int>(value),
                  static_cast<int>(ret));

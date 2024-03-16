@@ -33,6 +33,13 @@ esp_err_t ESP32BinaryValueReader::init() noexcept {
         return ret;
     }
 
+    ret = gpio_set_pull_mode(mPin, GPIO_PULLUP_ONLY);
+    if (ret != ESP_OK) {
+        ESP_LOGE(kTag, "Failed to set pull-up mode for pin %d due to %d",
+                 static_cast<int>(mPin), static_cast<int>(ret));
+        return ret;
+    }
+
     return ESP_OK;
 }
 
@@ -44,9 +51,9 @@ hal::BinaryValue
 ESP32BinaryValueReader::getValue(uint32_t level) const noexcept {
     switch (level) {
     case 1:
-        return hal::BinaryValue::HIGH;
+        return hal::BinaryValue::LOW;
     case 0:
     default:
-        return hal::BinaryValue::LOW;
+        return hal::BinaryValue::HIGH;
     }
 }

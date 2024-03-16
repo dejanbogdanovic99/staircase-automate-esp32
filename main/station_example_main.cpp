@@ -9,6 +9,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -19,8 +20,20 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
-#include "ESP32BinaryValueReader.hxx"
-#include "ESP32BinaryValueWriter.hxx"
+#include <hal/Timing.hxx>
+
+#include <ESP32BinaryValueReader.hxx>
+#include <ESP32BinaryValueWriter.hxx>
+#include <ESP32Timing.hxx>
+
+#include <staircase/BasicLight.hxx>
+#include <staircase/BasicMovingFactory.hxx>
+#include <staircase/ProximitySensor.hxx>
+#include <staircase/StaircaseLooper.hxx>
+
+#include <algorithm>
+#include <array>
+#include <sstream>
 
 /* The examples use WiFi configuration that you can set via project
    configuration menu
@@ -164,28 +177,119 @@ extern "C" void wifi_init_sta(void) {
     }
 }
 
+extern "C" void task_looper(void *pvParameters) {}
+
 extern "C" void app_main(void) {
     // Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
-        ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
+    // esp_err_t ret = nvs_flash_init();
+    // if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
+    //     ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    //     ESP_ERROR_CHECK(nvs_flash_erase());
+    //     ret = nvs_flash_init();
+    // }
+    // ESP_ERROR_CHECK(ret);
 
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
 
-    esp32::ESP32BinaryValueWriter writer{GPIO_NUM_33};
-    writer.writeValue(hal::BinaryValue::HIGH);
+    // writer.writeValue(hal::BinaryValue::HIGH);
 
-    esp32::ESP32BinaryValueReader reader{GPIO_NUM_34};
+    // esp32::ESP32BinaryValueReader reader{GPIO_NUM_34};
 
-    while (1)
-    {
-        ESP_LOGI(TAG, "Value from 34: %d", static_cast<int>(reader.readValue()));
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    // TaskHandle_t handle;
+
+    // xTaskCreatePinnedToCore( task_looper, "StaircaseLooper", 4096, nullptr,
+    // 0, &handle, 0);
+
+    //  // Should not reach here.
+    //  for( ;; );
+
+    std::array<esp32::ESP32BinaryValueWriter,
+               staircase::IBasicLight::kLightsNum>
+        outGpios{esp32::ESP32BinaryValueWriter{GPIO_NUM_4},
+                 esp32::ESP32BinaryValueWriter{GPIO_NUM_16},
+                 esp32::ESP32BinaryValueWriter{GPIO_NUM_17},
+                 esp32::ESP32BinaryValueWriter{GPIO_NUM_18},
+                 esp32::ESP32BinaryValueWriter{GPIO_NUM_19},
+                 esp32::ESP32BinaryValueWriter{GPIO_NUM_21},
+                 esp32::ESP32BinaryValueWriter{GPIO_NUM_22},
+                 esp32::ESP32BinaryValueWriter{GPIO_NUM_23}};
+
+    if (std::any_of(std::begin(outGpios), std::end(outGpios),
+                    [](auto &out) { return out.init() != ESP_OK; })) {
+        ESP_LOGE(TAG, "Failed to initialize all the ports, abort");
+        std::abort();
     }
 
-    wifi_init_sta();
+    esp32::ESP32BinaryValueReader inGpioDown{GPIO_NUM_25};
+    if (inGpioDown.init() != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize up port, abort");
+        std::abort();
+    }
+    esp32::ESP32BinaryValueReader inGpioUp{GPIO_NUM_26};
+    if (inGpioUp.init() != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize down port, abort");
+        std::abort();
+    }
+
+    esp32::ESP32Timing timing;
+
+    std::array<staircase::BasicLight, staircase::IBasicLight::kLightsNum>
+        lights{staircase::BasicLight{outGpios[0]},
+               staircase::BasicLight{outGpios[1]},
+               staircase::BasicLight{outGpios[2]},
+               staircase::BasicLight{outGpios[3]},
+               staircase::BasicLight{outGpios[4]},
+               staircase::BasicLight{outGpios[5]},
+               staircase::BasicLight{outGpios[6]},
+               staircase::BasicLight{outGpios[7]}};
+
+    staircase::BasicLights lightPointers;
+    std::transform(std::begin(lights), std::end(lights),
+                   std::begin(lightPointers),
+                   [](auto &basicLight) { return &basicLight; });
+
+    staircase::ProximitySensor downSensor{inGpioDown};
+    staircase::ProximitySensor upSensor{inGpioUp};
+
+    staircase::BasicMovingFactory movingFactory;
+
+    staircase::StaircaseLooper looper{lightPointers, downSensor, upSensor,
+                                      movingFactory};
+
+    std::int64_t currentTime = esp_timer_get_time();
+
+    while (1) {
+        // esp_task_wdt_reset();
+        // ESP_LOGI(TAG, "Value from 34: %d",
+        // static_cast<int>(reader.readValue()));
+
+        std::int64_t newCurrentTime = esp_timer_get_time();
+        std::int64_t delta = newCurrentTime - currentTime;
+
+        if (delta >= 1000000) {
+            currentTime = newCurrentTime;
+
+            std::ostringstream streamSensors;
+
+            streamSensors << "Sensors: down " << static_cast<int>(downSensor.isClose())
+                   << " ------- " << static_cast<int>(upSensor.isClose())
+                   << " up";
+
+            ESP_LOGI(TAG, "%s", streamSensors.str().c_str()); 
+            std::ostringstream streamLights;
+
+            streamLights << "Lights: ";
+
+            std::for_each(
+                std::begin(lights), std::end(lights), [&](const auto &light) {
+                    streamLights << static_cast<int>(light.getState()) << " ";
+                });
+
+            ESP_LOGI(TAG, "%s", streamLights.str().c_str());
+        }
+
+        looper.update(timing.getDelta());
+
+        timing.sleepFor(10);
+    }
 }

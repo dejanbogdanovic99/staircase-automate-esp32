@@ -2,12 +2,16 @@ idf_component_register(
     SRCS
         src/ESP32BinaryValueReader.cxx
         src/ESP32BinaryValueWriter.cxx
+        src/ESP32Timing.cxx
     INCLUDE_DIRS
         ./include
     REQUIRES
         staircase-automate
         log
         driver
+        esp_timer
+        esp_system
+        console
 )
 
 idf_component_set_property(
