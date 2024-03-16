@@ -3,7 +3,7 @@
 #include <hal/BinaryValue.hxx>
 #include <hal/IBinaryValueWriter.hxx>
 
-#include "driver/gpio.h"
+#include <driver/gpio.h>
 
 #if CONFIG_BINARY_OUTPUT_DEFAULT_VALUE_LOW
 #define BINARY_OUTPUT_DEFAULT_VALUE hal::BinaryValue::LOW

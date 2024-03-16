@@ -2,7 +2,7 @@ idf_component_register(
     SRCS
         src/ESP32BinaryValueReader.cxx
         src/ESP32BinaryValueWriter.cxx
-        src/ESP32Timing.cxx
+        src/ESP32Task.cxx
     INCLUDE_DIRS
         ./include
     REQUIRES

@@ -15,6 +15,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include <esp_timer.h>
 #include <string.h>
 
 #include "lwip/err.h"
@@ -24,12 +25,13 @@
 
 #include <ESP32BinaryValueReader.hxx>
 #include <ESP32BinaryValueWriter.hxx>
-#include <ESP32Timing.hxx>
+#include <ESP32Task.hxx>
 
 #include <staircase/BasicLight.hxx>
 #include <staircase/BasicMovingFactory.hxx>
 #include <staircase/ProximitySensor.hxx>
 #include <staircase/StaircaseLooper.hxx>
+#include <staircase/StaircaseRunnable.hxx>
 
 #include <algorithm>
 #include <array>
@@ -177,8 +179,6 @@ extern "C" void wifi_init_sta(void) {
     }
 }
 
-extern "C" void task_looper(void *pvParameters) {}
-
 extern "C" void app_main(void) {
     // Initialize NVS
     // esp_err_t ret = nvs_flash_init();
@@ -191,21 +191,10 @@ extern "C" void app_main(void) {
 
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
 
-    // writer.writeValue(hal::BinaryValue::HIGH);
-
-    // esp32::ESP32BinaryValueReader reader{GPIO_NUM_34};
-
-    // TaskHandle_t handle;
-
-    // xTaskCreatePinnedToCore( task_looper, "StaircaseLooper", 4096, nullptr,
-    // 0, &handle, 0);
-
-    //  // Should not reach here.
-    //  for( ;; );
-
+    // HAL objects
     std::array<esp32::ESP32BinaryValueWriter,
                staircase::IBasicLight::kLightsNum>
-        outGpios{esp32::ESP32BinaryValueWriter{GPIO_NUM_4},
+        kOutputs{esp32::ESP32BinaryValueWriter{GPIO_NUM_4},
                  esp32::ESP32BinaryValueWriter{GPIO_NUM_16},
                  esp32::ESP32BinaryValueWriter{GPIO_NUM_17},
                  esp32::ESP32BinaryValueWriter{GPIO_NUM_18},
@@ -214,82 +203,87 @@ extern "C" void app_main(void) {
                  esp32::ESP32BinaryValueWriter{GPIO_NUM_22},
                  esp32::ESP32BinaryValueWriter{GPIO_NUM_23}};
 
-    if (std::any_of(std::begin(outGpios), std::end(outGpios),
+    esp32::ESP32BinaryValueReader kInputDown{GPIO_NUM_25};
+
+    esp32::ESP32BinaryValueReader kInputUp{GPIO_NUM_26};
+
+    if (std::any_of(std::begin(kOutputs), std::end(kOutputs),
                     [](auto &out) { return out.init() != ESP_OK; })) {
         ESP_LOGE(TAG, "Failed to initialize all the ports, abort");
         std::abort();
     }
 
-    esp32::ESP32BinaryValueReader inGpioDown{GPIO_NUM_25};
-    if (inGpioDown.init() != ESP_OK) {
+    if (kInputDown.init() != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize up port, abort");
         std::abort();
     }
-    esp32::ESP32BinaryValueReader inGpioUp{GPIO_NUM_26};
-    if (inGpioUp.init() != ESP_OK) {
+
+    if (kInputUp.init() != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize down port, abort");
         std::abort();
     }
 
-    esp32::ESP32Timing timing;
-
+    // Staircase objects
     std::array<staircase::BasicLight, staircase::IBasicLight::kLightsNum>
-        lights{staircase::BasicLight{outGpios[0]},
-               staircase::BasicLight{outGpios[1]},
-               staircase::BasicLight{outGpios[2]},
-               staircase::BasicLight{outGpios[3]},
-               staircase::BasicLight{outGpios[4]},
-               staircase::BasicLight{outGpios[5]},
-               staircase::BasicLight{outGpios[6]},
-               staircase::BasicLight{outGpios[7]}};
+        kLights{staircase::BasicLight{kOutputs[0]},
+                staircase::BasicLight{kOutputs[1]},
+                staircase::BasicLight{kOutputs[2]},
+                staircase::BasicLight{kOutputs[3]},
+                staircase::BasicLight{kOutputs[4]},
+                staircase::BasicLight{kOutputs[5]},
+                staircase::BasicLight{kOutputs[6]},
+                staircase::BasicLight{kOutputs[7]}};
 
-    staircase::BasicLights lightPointers;
-    std::transform(std::begin(lights), std::end(lights),
-                   std::begin(lightPointers),
-                   [](auto &basicLight) { return &basicLight; });
+    staircase::BasicLights kBasicLights{kLights[0], kLights[1], kLights[2],
+                                        kLights[3], kLights[4], kLights[5],
+                                        kLights[6], kLights[7]};
 
-    staircase::ProximitySensor downSensor{inGpioDown};
-    staircase::ProximitySensor upSensor{inGpioUp};
+    staircase::ProximitySensor kDownSensor{kInputDown};
+    staircase::ProximitySensor kUpSensor{kInputUp};
 
-    staircase::BasicMovingFactory movingFactory;
+    staircase::BasicMovingFactory kMovingFactory;
 
-    staircase::StaircaseLooper looper{lightPointers, downSensor, upSensor,
-                                      movingFactory};
+    staircase::StaircaseLooper kLooper{kBasicLights, kDownSensor, kUpSensor,
+                                       kMovingFactory};
+
+    // Tasks
+    staircase::StaircaseRunnable kStaircaseRunnable{kLooper};
+    esp32::ESP32Task kStaircaseTask{
+        "staircase", 1024, 0, kStaircaseRunnable,
+        staircase::StaircaseRunnable::kUpdateInterval};
+
+    kStaircaseTask.init();
 
     std::int64_t currentTime = esp_timer_get_time();
 
     while (1) {
-        // esp_task_wdt_reset();
-        // ESP_LOGI(TAG, "Value from 34: %d",
-        // static_cast<int>(reader.readValue()));
-
         std::int64_t newCurrentTime = esp_timer_get_time();
         std::int64_t delta = newCurrentTime - currentTime;
 
         if (delta >= 1000000) {
+            std::lock_guard<std::mutex> lock = kLooper.block();
             currentTime = newCurrentTime;
 
-            std::ostringstream streamSensors;
+            std::ostringstream stream;
 
-            streamSensors << "Sensors: down " << static_cast<int>(downSensor.isClose())
-                   << " ------- " << static_cast<int>(upSensor.isClose())
-                   << " up";
+            stream << "Sensors: down "
+                          << static_cast<int>(kDownSensor.isClose())
+                          << " ------- "
+                          << static_cast<int>(kUpSensor.isClose()) << " up";
 
-            ESP_LOGI(TAG, "%s", streamSensors.str().c_str()); 
-            std::ostringstream streamLights;
+            ESP_LOGI(TAG, "%s", stream.str().c_str());
 
-            streamLights << "Lights: ";
+            stream.str() = "";
+            stream << "Lights: ";
 
             std::for_each(
-                std::begin(lights), std::end(lights), [&](const auto &light) {
-                    streamLights << static_cast<int>(light.getState()) << " ";
+                std::begin(kLights), std::end(kLights), [&](const auto &light) {
+                    stream << static_cast<int>(light.isOn()) << " ";
                 });
 
-            ESP_LOGI(TAG, "%s", streamLights.str().c_str());
+            ESP_LOGI(TAG, "%s", stream.str().c_str());
         }
 
-        looper.update(timing.getDelta());
-
-        timing.sleepFor(10);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }

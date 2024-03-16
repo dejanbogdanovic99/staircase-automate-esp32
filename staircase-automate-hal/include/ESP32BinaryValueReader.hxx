@@ -3,7 +3,7 @@
 #include <hal/BinaryValue.hxx>
 #include <hal/IBinaryValueReader.hxx>
 
-#include "driver/gpio.h"
+#include <driver/gpio.h>
 
 namespace esp32 {
 
