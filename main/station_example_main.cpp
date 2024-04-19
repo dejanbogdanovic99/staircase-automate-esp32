@@ -8,13 +8,17 @@
 */
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif_sntp.h"
+#include "esp_sntp.h"
 #include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "lwip/ip_addr.h"
 #include "nvs_flash.h"
+#include "esp_sleep.h"
 #include <esp_timer.h>
 #include <string.h>
 
@@ -26,6 +30,7 @@
 #include <ESP32BinaryValueReader.hxx>
 #include <ESP32BinaryValueWriter.hxx>
 #include <ESP32Task.hxx>
+#include <ESP32Persistence.hxx>
 
 #include <staircase/BasicLight.hxx>
 #include <staircase/BasicMovingFactory.hxx>
@@ -114,9 +119,6 @@ static void event_handler(void *arg, esp_event_base_t event_base,
 extern "C" void wifi_init_sta(void) {
     s_wifi_event_group = xEventGroupCreate();
 
-    ESP_ERROR_CHECK(esp_netif_init());
-
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -179,111 +181,244 @@ extern "C" void wifi_init_sta(void) {
     }
 }
 
-extern "C" void app_main(void) {
-    // Initialize NVS
-    // esp_err_t ret = nvs_flash_init();
-    // if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
-    //     ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    //     ESP_ERROR_CHECK(nvs_flash_erase());
-    //     ret = nvs_flash_init();
-    // }
-    // ESP_ERROR_CHECK(ret);
+extern "C" void time_sync_notification_cb(struct timeval *tv) {
+    ESP_LOGI(TAG, "Notification of a time synchronization event");
+}
 
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+extern "C" void sntp_predhcp_init(void) {
+    esp_sntp_config_t config;
+    config.smooth_sync = false;
+    config.server_from_dhcp = true;
+    config.wait_for_sync = true;
+    config.start = true;
+    config.sync_cb = NULL;
+    config.renew_servers_after_new_IP = false;
+    config.index_of_first_server = 0;
+    config.num_of_servers = 1;
+    config.servers[0] = "132.163.97.2";
+    config.start = false; // start SNTP service explicitly (after connecting)
+    config.server_from_dhcp = true; // accept NTP offers from DHCP server, if
+                                    // any (need to enable *before* connecting)
+    config.renew_servers_after_new_IP =
+        true; // let esp-netif update configured SNTP server(s) after receiving
+              // DHCP lease
+    config.index_of_first_server =
+        1; // updates from server num 1, leaving server 0 (from DHCP) intact
+    // configure the event on which we renew servers
+    config.ip_event_to_renew = static_cast<ip_event_t>(IP_EVENT_STA_GOT_IP);
+    config.sync_cb =
+        time_sync_notification_cb; // only if we need the notification function
+    esp_netif_sntp_init(&config);
+}
 
-    // HAL objects
-    std::array<esp32::ESP32BinaryValueWriter,
-               staircase::IBasicLight::kLightsNum>
-        kOutputs{esp32::ESP32BinaryValueWriter{GPIO_NUM_4},
-                 esp32::ESP32BinaryValueWriter{GPIO_NUM_16},
-                 esp32::ESP32BinaryValueWriter{GPIO_NUM_17},
-                 esp32::ESP32BinaryValueWriter{GPIO_NUM_18},
-                 esp32::ESP32BinaryValueWriter{GPIO_NUM_19},
-                 esp32::ESP32BinaryValueWriter{GPIO_NUM_21},
-                 esp32::ESP32BinaryValueWriter{GPIO_NUM_22},
-                 esp32::ESP32BinaryValueWriter{GPIO_NUM_23}};
+extern "C" void power_management(void * args)
+{
+    for (;;)
+    {
+        time_t now = 0;
+        struct tm timeinfo = { 0 };
+        time(&now);
+        localtime_r(&now, &timeinfo);
 
-    esp32::ESP32BinaryValueReader kInputDown{GPIO_NUM_25};
-
-    esp32::ESP32BinaryValueReader kInputUp{GPIO_NUM_26};
-
-    if (std::any_of(std::begin(kOutputs), std::end(kOutputs),
-                    [](auto &out) { return out.init() != ESP_OK; })) {
-        ESP_LOGE(TAG, "Failed to initialize all the ports, abort");
-        std::abort();
-    }
-
-    if (kInputDown.init() != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize up port, abort");
-        std::abort();
-    }
-
-    if (kInputUp.init() != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize down port, abort");
-        std::abort();
-    }
-
-    // Staircase objects
-    std::array<staircase::BasicLight, staircase::IBasicLight::kLightsNum>
-        kLights{staircase::BasicLight{kOutputs[0]},
-                staircase::BasicLight{kOutputs[1]},
-                staircase::BasicLight{kOutputs[2]},
-                staircase::BasicLight{kOutputs[3]},
-                staircase::BasicLight{kOutputs[4]},
-                staircase::BasicLight{kOutputs[5]},
-                staircase::BasicLight{kOutputs[6]},
-                staircase::BasicLight{kOutputs[7]}};
-
-    staircase::BasicLights kBasicLights{kLights[0], kLights[1], kLights[2],
-                                        kLights[3], kLights[4], kLights[5],
-                                        kLights[6], kLights[7]};
-
-    staircase::ProximitySensor kDownSensor{kInputDown};
-    staircase::ProximitySensor kUpSensor{kInputUp};
-
-    staircase::BasicMovingFactory kMovingFactory;
-
-    staircase::StaircaseLooper kLooper{kBasicLights, kDownSensor, kUpSensor,
-                                       kMovingFactory};
-
-    // Tasks
-    staircase::StaircaseRunnable kStaircaseRunnable{kLooper};
-    esp32::ESP32Task kStaircaseTask{
-        "staircase", 1024, 0, kStaircaseRunnable,
-        staircase::StaircaseRunnable::kUpdateInterval};
-
-    kStaircaseTask.init();
-
-    std::int64_t currentTime = esp_timer_get_time();
-
-    while (1) {
-        std::int64_t newCurrentTime = esp_timer_get_time();
-        std::int64_t delta = newCurrentTime - currentTime;
-
-        if (delta >= 1000000) {
-            std::lock_guard<std::mutex> lock = kLooper.block();
-            currentTime = newCurrentTime;
-
-            std::ostringstream stream;
-
-            stream << "Sensors: down "
-                          << static_cast<int>(kDownSensor.isClose())
-                          << " ------- "
-                          << static_cast<int>(kUpSensor.isClose()) << " up";
-
-            ESP_LOGI(TAG, "%s", stream.str().c_str());
-
-            stream.str() = "";
-            stream << "Lights: ";
-
-            std::for_each(
-                std::begin(kLights), std::end(kLights), [&](const auto &light) {
-                    stream << static_cast<int>(light.isOn()) << " ";
-                });
-
-            ESP_LOGI(TAG, "%s", stream.str().c_str());
+        if (timeinfo.tm_hour > 9 && timeinfo.tm_min > 20)
+        {
+            ESP_LOGI(TAG, "Entering deep sleep");
+            esp_sleep_enable_timer_wakeup(20 * 1000000);
+            esp_deep_sleep_start();
         }
-
+        else
+        {
+            ESP_LOGI(TAG, "Not yet");
+        }
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
+}
+
+extern "C" void app_main(void) {
+
+    // 1. initialize flash
+    // 2. load and setup time
+    // 3. start task for staircase
+    // 4. setup wifi (and pre sntp, what is needed)
+    // 5. start wifi
+    // 6. wait some time with retries to establish wifi connection
+    // success: 
+    //  -> start sntp
+    //  -> wait some time to sync with retries
+    //  -> gether intel on sunrise (either by calculating it or by http(preferably))
+    // 7. task sleep until sunrise + delta
+    // 8. calculate when to wake up (sunset - delta)
+    // 9. store new time
+    // stop sntp if needed stop wifi (if needed)
+    // stop handling of staircase
+    // 10. deinitialize flash
+    // 11. enter deepsleep
+    
+    // change interface of looper to accept only references to filters
+
+    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+    tzset();
+    time_t now = 0;
+    struct tm timeinfo = { 0 };
+    char strftime_buf[64];
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(TAG, "The current date/time in Belgrade is: %s", strftime_buf);
+
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
+        ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    nvs_handle_t handle;
+    ESP_ERROR_CHECK(nvs_open("time_storage", NVS_READWRITE, &handle));
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    esp32::ESP32Persistence persistence{handle};
+    int boot = persistence.getValue("abc");
+    ESP_LOGI(TAG, "boot no %d", boot);
+    ++boot;
+    persistence.setValue("abc", boot);
+
+    ESP_ERROR_CHECK(nvs_commit(handle));
+
+    sntp_predhcp_init();
+
+    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+    wifi_init_sta();
+
+    esp_netif_sntp_start();
+
+    // wait for time to be set
+    
+    int retry = 0;
+    const int retry_count = 15;
+    while (esp_netif_sntp_sync_wait(2000 / portTICK_PERIOD_MS) == ESP_ERR_TIMEOUT && ++retry < retry_count) {
+        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+    }
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(TAG, "The current date/time in Belgrade is: %s", strftime_buf);
+
+    if (sntp_get_sync_mode() == SNTP_SYNC_MODE_SMOOTH) {
+        struct timeval outdelta;
+        while (sntp_get_sync_status() == SNTP_SYNC_STATUS_IN_PROGRESS) {
+            adjtime(NULL, &outdelta);
+            ESP_LOGI(TAG, "Waiting for adjusting time ... outdelta = %jd sec: %li ms: %li us",
+                        (intmax_t)outdelta.tv_sec,
+                        outdelta.tv_usec/1000,
+                        outdelta.tv_usec%1000);
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
+        }
+    }
+
+    TaskHandle_t xHandle = NULL;
+    xTaskCreate(power_management, "power_management", 1024, NULL, tskIDLE_PRIORITY, &xHandle);
+
+    for (;;)
+    {
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
+    }
+
+    // HAL objects
+    // std::array<esp32::ESP32BinaryValueWriter,
+    //            staircase::IBasicLight::kLightsNum>
+    //     kOutputs{esp32::ESP32BinaryValueWriter{GPIO_NUM_4},
+    //              esp32::ESP32BinaryValueWriter{GPIO_NUM_16},
+    //              esp32::ESP32BinaryValueWriter{GPIO_NUM_17},
+    //              esp32::ESP32BinaryValueWriter{GPIO_NUM_18},
+    //              esp32::ESP32BinaryValueWriter{GPIO_NUM_19},
+    //              esp32::ESP32BinaryValueWriter{GPIO_NUM_21},
+    //              esp32::ESP32BinaryValueWriter{GPIO_NUM_22},
+    //              esp32::ESP32BinaryValueWriter{GPIO_NUM_23}};
+
+    // esp32::ESP32BinaryValueReader kInputDown{GPIO_NUM_25};
+
+    // esp32::ESP32BinaryValueReader kInputUp{GPIO_NUM_26};
+
+    // if (std::any_of(std::begin(kOutputs), std::end(kOutputs),
+    //                 [](auto &out) { return out.init() != ESP_OK; })) {
+    //     ESP_LOGE(TAG, "Failed to initialize all the ports, abort");
+    //     std::abort();
+    // }
+
+    // if (kInputDown.init() != ESP_OK) {
+    //     ESP_LOGE(TAG, "Failed to initialize up port, abort");
+    //     std::abort();
+    // }
+
+    // if (kInputUp.init() != ESP_OK) {
+    //     ESP_LOGE(TAG, "Failed to initialize down port, abort");
+    //     std::abort();
+    // }
+
+    // // Staircase objects
+    // std::array<staircase::BasicLight, staircase::IBasicLight::kLightsNum>
+    //     kLights{staircase::BasicLight{kOutputs[0]},
+    //             staircase::BasicLight{kOutputs[1]},
+    //             staircase::BasicLight{kOutputs[2]},
+    //             staircase::BasicLight{kOutputs[3]},
+    //             staircase::BasicLight{kOutputs[4]},
+    //             staircase::BasicLight{kOutputs[5]},
+    //             staircase::BasicLight{kOutputs[6]},
+    //             staircase::BasicLight{kOutputs[7]}};
+
+    // staircase::BasicLights kBasicLights{kLights[0], kLights[1], kLights[2],
+    //                                     kLights[3], kLights[4], kLights[5],
+    //                                     kLights[6], kLights[7]};
+
+    // staircase::ProximitySensor kDownSensor{kInputDown};
+    // staircase::ProximitySensor kUpSensor{kInputUp};
+
+    // staircase::BasicMovingFactory kMovingFactory;
+
+    // staircase::StaircaseLooper kLooper{kBasicLights, kDownSensor, kUpSensor,
+    //                                    kMovingFactory};
+
+    // // Tasks
+    // staircase::StaircaseRunnable kStaircaseRunnable{kLooper};
+    // esp32::ESP32Task kStaircaseTask{
+    //     "staircase", 1024, 0, kStaircaseRunnable,
+    //     staircase::StaircaseRunnable::kUpdateInterval};
+
+    // kStaircaseTask.init();
+
+    // std::int64_t currentTime = esp_timer_get_time();
+
+    // while (1) {
+    //     std::int64_t newCurrentTime = esp_timer_get_time();
+    //     std::int64_t delta = newCurrentTime - currentTime;
+
+    //     if (delta >= 1000000) {
+    //         std::lock_guard<std::mutex> lock = kLooper.block();
+    //         currentTime = newCurrentTime;
+
+    //         std::ostringstream stream;
+
+    //         stream << "Sensors: down "
+    //                       << static_cast<int>(kDownSensor.isClose())
+    //                       << " ------- "
+    //                       << static_cast<int>(kUpSensor.isClose()) << " up";
+
+    //         ESP_LOGI(TAG, "%s", stream.str().c_str());
+
+    //         stream.str() = "";
+    //         stream << "Lights: ";
+
+    //         std::for_each(
+    //             std::begin(kLights), std::end(kLights), [&](const auto
+    //             &light) {
+    //                 stream << static_cast<int>(light.isOn()) << " ";
+    //             });
+
+    //         ESP_LOGI(TAG, "%s", stream.str().c_str());
+    //     }
+
+    //     vTaskDelay(1000 / portTICK_PERIOD_MS);
+    // }
 }

@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         src/ESP32BinaryValueReader.cxx
         src/ESP32BinaryValueWriter.cxx
+        src/ESP32Persistence.cxx
         src/ESP32Task.cxx
     INCLUDE_DIRS
         ./include
@@ -9,6 +10,7 @@ idf_component_register(
         staircase-automate
         log
         driver
+        nvs_flash
         esp_timer
         esp_system
         console
