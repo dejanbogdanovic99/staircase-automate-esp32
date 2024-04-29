@@ -12,6 +12,9 @@ idf_component_register(
         lwip
         staircase-automate
         staircase-automate-hal
+        esp-tls
+        json
+        mbedtls
 )
 
 idf_component_set_property(
