@@ -12,7 +12,6 @@ class ESP32BinaryValueReader : public hal::IBinaryValueReader {
     ESP32BinaryValueReader(gpio_num_t pin) noexcept;
     ~ESP32BinaryValueReader();
 
-    esp_err_t init() noexcept;
     hal::BinaryValue readValue() noexcept final;
 
   private:

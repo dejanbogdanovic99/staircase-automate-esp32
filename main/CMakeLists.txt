@@ -1,6 +1,6 @@
 idf_component_register(
     SRCS
-        station_example_main.cpp
+        main.cpp
     INCLUDE_DIRS
         .
     REQUIRES

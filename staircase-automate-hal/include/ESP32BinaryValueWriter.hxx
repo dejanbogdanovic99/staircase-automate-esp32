@@ -18,7 +18,6 @@ class ESP32BinaryValueWriter : public hal::IBinaryValueWriter {
     ESP32BinaryValueWriter(gpio_num_t pin) noexcept;
     ~ESP32BinaryValueWriter();
 
-    esp_err_t init() noexcept;
     void writeValue(hal::BinaryValue value) noexcept final;
 
   private:
